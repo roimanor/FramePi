@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.tmp_album.html
+.venv/
+.env
+token_photos.json
+token_calendar.json
+credentials.json

@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>FramePi Remote</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body class="remote-page remote-mode-waiting">
+    <main class="remote-main">
+      <header class="remote-header">
+        <div class="remote-header-top">
+          <h1 class="remote-title">FramePi</h1>
+          <span class="remote-mode-badge" id="remote-mode-badge">Connecting</span>
+        </div>
+        <p class="remote-hint" id="remote-header-hint">Control your frame on the same Wi‑Fi.</p>
+      </header>
+
+      <section class="remote-hero remote-card" id="remote-now" aria-live="polite">
+        <p class="remote-now-mode" id="remote-now-mode">Waiting for the frame…</p>
+
+        <div class="remote-preview-slot" id="remote-preview-slot">
+          <div class="remote-preview-frame" aria-hidden="true"></div>
+          <p class="remote-preview-placeholder" id="remote-preview-placeholder">Waiting for the frame…</p>
+          <img class="remote-preview-img" id="remote-preview-img" alt="" />
+          <video class="remote-preview-video" id="remote-preview-video" controls playsinline preload="metadata"></video>
+        </div>
+
+        <dl class="remote-now-meta" id="remote-now-meta"></dl>
+
+        <form class="remote-edit" id="remote-edit" hidden>
+          <button
+            type="button"
+            class="remote-edit-tab"
+            id="remote-edit-tab"
+            aria-expanded="false"
+            aria-controls="remote-edit-panel"
+          >
+            <span class="remote-edit-tab-label">Edit details</span>
+            <span class="remote-edit-tab-chevron" aria-hidden="true"></span>
+          </button>
+          <div id="remote-edit-panel" class="remote-edit-panel" hidden>
+            <h3 class="remote-edit-heading">Edit this photo</h3>
+            <p class="remote-edit-filename" id="remote-edit-filename"></p>
+          <label class="remote-field">
+            <span class="remote-field-label">Display name</span>
+            <input type="text" class="remote-field-input" id="remote-edit-name" autocomplete="off" placeholder="Optional title" />
+          </label>
+          <label class="remote-field">
+            <span class="remote-field-label">Date</span>
+            <input type="text" class="remote-field-input" id="remote-edit-date" autocomplete="off" placeholder="e.g. 2024-06-15" />
+          </label>
+          <label class="remote-field">
+            <span class="remote-field-label">Location</span>
+            <input type="text" class="remote-field-input" id="remote-edit-location" autocomplete="off" placeholder="Street, place, or notes" />
+          </label>
+          <div class="remote-field-row">
+            <label class="remote-field remote-field--half">
+              <span class="remote-field-label">City</span>
+              <input type="text" class="remote-field-input" id="remote-edit-city" autocomplete="off" placeholder="e.g. Tokyo" />
+            </label>
+            <label class="remote-field remote-field--half">
+              <span class="remote-field-label">Country</span>
+              <input type="text" class="remote-field-input" id="remote-edit-country" autocomplete="off" placeholder="e.g. Japan" />
+            </label>
+          </div>
+            <div class="remote-edit-actions">
+              <button type="submit" class="remote-btn remote-btn--primary" id="remote-edit-save">Save details</button>
+              <button type="button" class="remote-btn remote-btn--danger" id="remote-edit-delete">Remove from frame</button>
+            </div>
+          </div>
+        </form>
+      </section>
+
+      <section class="remote-card remote-controls-panel" id="remote-controls-gallery" data-mode-panel="gallery" hidden>
+        <h2 class="remote-card-title remote-card-title--sr">Slideshow</h2>
+        <div class="remote-toolbar" role="toolbar" aria-label="Slideshow controls">
+          <button type="button" class="remote-icon-btn" data-remote-key="ArrowLeft" aria-label="Previous">
+            <span class="remote-glyph remote-glyph--prev" aria-hidden="true"></span>
+          </button>
+          <button
+            type="button"
+            class="remote-icon-btn remote-icon-btn--pause"
+            id="remote-pause-btn"
+            hidden
+            aria-label="Pause"
+            aria-pressed="false"
+          >
+            <span class="remote-glyph remote-glyph--pause" aria-hidden="true"></span>
+            <span class="remote-glyph remote-glyph--play" aria-hidden="true"></span>
+          </button>
+          <button type="button" class="remote-icon-btn" data-remote-key="ArrowRight" aria-label="Next">
+            <span class="remote-glyph remote-glyph--next" aria-hidden="true"></span>
+          </button>
+          <button type="button" class="remote-icon-btn remote-icon-btn--thumb" data-remote-key="ArrowUp" aria-label="Open map">
+            <img class="remote-thumb-icon" src="/static/icons/map.svg" alt="" width="28" height="28" />
+          </button>
+        </div>
+        <div class="remote-toolbar remote-toolbar--aux">
+          <button type="button" class="remote-icon-btn remote-icon-btn--aux" data-remote-key="OnThisDay" aria-label="Same day in past years">
+            <span class="remote-glyph remote-glyph--calendar" aria-hidden="true"></span>
+          </button>
+        </div>
+        <div class="remote-timing">
+          <label class="remote-field" for="remote-slide-seconds">
+            <span class="remote-field-label">Seconds per photo</span>
+            <input type="number" class="remote-field-input" id="remote-slide-seconds" min="0.5" max="3600" step="0.5" inputmode="decimal" />
+          </label>
+          <button type="button" class="remote-btn remote-btn--primary remote-btn--full" id="remote-slide-apply">Update speed</button>
+        </div>
+      </section>
+
+      <section class="remote-card remote-controls-panel" id="remote-controls-map" data-mode-panel="map" hidden>
+        <h2 class="remote-card-title remote-card-title--sr">Map</h2>
+        <div class="remote-toolbar" role="toolbar" aria-label="Map controls">
+          <button type="button" class="remote-icon-btn" data-remote-key="ArrowLeft" aria-label="Previous pin">
+            <span class="remote-glyph remote-glyph--prev" aria-hidden="true"></span>
+          </button>
+          <button type="button" class="remote-icon-btn" data-remote-key="ArrowRight" aria-label="Next pin">
+            <span class="remote-glyph remote-glyph--next" aria-hidden="true"></span>
+          </button>
+          <button type="button" class="remote-icon-btn remote-icon-btn--thumb" data-remote-key="ArrowDown" aria-label="Back to slideshow">
+            <img class="remote-thumb-icon" src="/static/icons/gallery.svg" alt="" width="28" height="28" />
+          </button>
+          <button type="button" class="remote-icon-btn remote-icon-btn--aux" data-remote-key="Enter" aria-label="Skip to next slide">
+            <span class="remote-glyph remote-glyph--skip" aria-hidden="true"></span>
+          </button>
+        </div>
+      </section>
+
+      <section class="remote-card remote-card--tools">
+        <button type="button" class="remote-btn remote-btn--secondary remote-btn--full" id="remote-sync-album">
+          ↻ Sync from Google Photos
+        </button>
+      </section>
+
+      <p id="remote-status" class="remote-status" aria-live="polite"></p>
+    </main>
+    <script src="/static/remote.js"></script>
+  </body>
+</html>
