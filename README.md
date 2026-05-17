@@ -23,7 +23,7 @@ pip install -r requirements.txt
 Then edit `.env`:
 
 ```env
-GOOGLE_PHOTOS_SHARED_ALBUM_URL=https://photos.app.goo.gl/SZ2HK3EHBfAWo22D9
+GOOGLE_PHOTOS_SHARED_ALBUM_URL=https://photos.app.goo.gl/***
 SYNC_INTERVAL_SECONDS=900
 PORT=8080
 ```
