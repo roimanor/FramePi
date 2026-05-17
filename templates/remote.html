@@ -26,7 +26,17 @@
           <video class="remote-preview-video" id="remote-preview-video" controls playsinline preload="metadata"></video>
         </div>
 
-        <dl class="remote-now-meta" id="remote-now-meta"></dl>
+        <div class="remote-slide-info">
+          <div class="remote-slide-title-row">
+            <span class="remote-slide-title-label">Title</span>
+            <span class="remote-slide-title-text" id="remote-slide-title">—</span>
+          </div>
+          <div class="remote-slide-location-row">
+            <span class="remote-slide-meta-label">Location</span>
+            <span class="remote-slide-meta-text" id="remote-slide-location">—</span>
+          </div>
+          <dl class="remote-now-meta" id="remote-now-meta"></dl>
+        </div>
 
         <form class="remote-edit" id="remote-edit" hidden>
           <button
@@ -82,7 +92,6 @@
             type="button"
             class="remote-icon-btn remote-icon-btn--pause"
             id="remote-pause-btn"
-            hidden
             aria-label="Pause"
             aria-pressed="false"
           >
@@ -95,18 +104,16 @@
           <button type="button" class="remote-icon-btn remote-icon-btn--thumb" data-remote-key="ArrowUp" aria-label="Open map">
             <img class="remote-thumb-icon" src="/static/icons/map.svg" alt="" width="28" height="28" />
           </button>
-        </div>
-        <div class="remote-toolbar remote-toolbar--aux">
           <button type="button" class="remote-icon-btn remote-icon-btn--aux" data-remote-key="OnThisDay" aria-label="Same day in past years">
             <span class="remote-glyph remote-glyph--calendar" aria-hidden="true"></span>
           </button>
         </div>
         <div class="remote-timing">
-          <label class="remote-field" for="remote-slide-seconds">
-            <span class="remote-field-label">Seconds per photo</span>
-            <input type="number" class="remote-field-input" id="remote-slide-seconds" min="0.5" max="3600" step="0.5" inputmode="decimal" />
+          <label class="remote-timing-row" for="remote-slide-seconds">
+            <span class="remote-timing-label">Seconds per photo</span>
+            <input type="number" class="remote-timing-input" id="remote-slide-seconds" min="0.5" max="3600" step="0.5" inputmode="decimal" />
           </label>
-          <button type="button" class="remote-btn remote-btn--primary remote-btn--full" id="remote-slide-apply">Update speed</button>
+          <button type="button" class="remote-btn remote-btn--primary remote-btn--compact" id="remote-slide-apply">Set</button>
         </div>
       </section>
 

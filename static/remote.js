@@ -2,6 +2,8 @@
   var statusEl = document.getElementById("remote-status");
   var nowModeEl = document.getElementById("remote-now-mode");
   var nowMetaEl = document.getElementById("remote-now-meta");
+  var slideTitleEl = document.getElementById("remote-slide-title");
+  var slideLocationEl = document.getElementById("remote-slide-location");
   var previewSlot = document.getElementById("remote-preview-slot");
   var previewPlaceholder = document.getElementById("remote-preview-placeholder");
   var previewImg = document.getElementById("remote-preview-img");
@@ -67,26 +69,47 @@
     return String(item.name).trim();
   }
 
+  function setSlideTitle(text) {
+    if (!slideTitleEl) return;
+    var t = text != null ? String(text).trim() : "";
+    slideTitleEl.textContent = t || "—";
+    slideTitleEl.classList.toggle("remote-slide-title-text--empty", !t);
+  }
+
+  function formatLocationLine(item) {
+    if (!item) return "";
+    var parts = [];
+    var loc = String(item.location || "").trim();
+    if (loc) parts.push(loc);
+    var place = [item.city, item.country].filter(Boolean).join(", ");
+    if (place && parts.indexOf(place) < 0) parts.push(place);
+    return parts.join(" · ");
+  }
+
+  function setSlideLocation(text) {
+    if (!slideLocationEl) return;
+    var t = text != null ? String(text).trim() : "";
+    slideLocationEl.textContent = t || "—";
+    slideLocationEl.classList.toggle("remote-slide-meta-text--empty", !t);
+  }
+
   function fillMetaFromItem(item, lines) {
     clearMeta();
-    var title = itemDisplayTitle(item);
-    if (title) addMetaRow("Title", title);
+    setSlideTitle(item ? itemDisplayTitle(item) : "");
+    setSlideLocation(item ? formatLocationLine(item) : "");
 
     if (Array.isArray(lines) && lines.length) {
       lines.forEach(function (line, i) {
         if (i === 0) return;
-        var label = "";
-        if (line.indexOf("lat ") === 0) label = "GPS";
-        else if (i === 1 || (i === 2 && !label)) label = "Location";
-        else if (line.match(/^\d{4}/)) label = "Date";
-        addMetaRow(label, line);
+        if (line.indexOf("lat ") === 0) {
+          addMetaRow("GPS", line);
+        } else if (line.match(/^\d{4}/)) {
+          addMetaRow("Date", line);
+        }
       });
       return;
     }
     if (!item) return;
-    if (item.location) addMetaRow("Location", item.location);
-    var place = [item.city, item.country].filter(Boolean).join(", ");
-    if (place) addMetaRow("Place", place);
     if (item.gps_latitude != null && item.gps_longitude != null) {
       addMetaRow(
         "GPS",
@@ -193,7 +216,8 @@
 
   function updatePauseButton(paused, show) {
     if (!pauseBtn) return;
-    pauseBtn.hidden = !show;
+    pauseBtn.classList.toggle("remote-icon-btn--inactive", !show);
+    pauseBtn.disabled = !show;
     pauseBtn.setAttribute("aria-label", paused ? "Play" : "Pause");
     pauseBtn.setAttribute("aria-pressed", paused ? "true" : "false");
     pauseBtn.classList.toggle("remote-icon-btn--is-paused", Boolean(paused));
@@ -269,16 +293,19 @@
       if (nowModeEl) nowModeEl.textContent = "Exploring the map";
       setPreviewPlaceholder("");
       var pin = payload.map_pin || {};
+      setSlideTitle(pin.label || "");
+      setSlideLocation(pin.summary || "");
       if (pin.total > 0) {
         addMetaRow("Pin", (Number(pin.index) || 0) + 1 + " / " + pin.total);
       }
-      addMetaRow("Location", pin.label);
       addMetaRow("Media", pin.summary);
       return;
     }
     if (mode === "empty") {
       if (nowModeEl) nowModeEl.textContent = "Nothing playing";
       setPreviewPlaceholder(payload.message || "No photos on the frame yet");
+      setSlideTitle("");
+      setSlideLocation("");
       addMetaRow("Status", payload.message || "Nothing to show");
     }
   }

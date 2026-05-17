@@ -8,6 +8,9 @@ Letterbox sizing works on **Mac and Raspberry Pi**: optional ``FRAMEPI_VIEW_WIDT
 
 Set ``FRAMEPI_OVERLAY_METADATA=1`` to show the filename / GPS strip on gallery photos and videos (off by default).
 
+OLED burn-in: ``FRAMEPI_OLED_SHIFT=1`` (default) nudges the image 1–2 px on a slow orbit before each
+frame is shown. Tune with ``FRAMEPI_OLED_SHIFT_PX`` and ``FRAMEPI_OLED_SHIFT_SEC``.
+
 Video download size is set at sync via ``GOOGLE_PHOTOS_VIDEO_SUFFIX_ORDER`` in ``.env`` (``m18`` = smallest).
 Optional ``FRAMEPI_VIDEO_PROXY=1`` re-encodes with ffmpeg at playback time (usually not needed).
 
@@ -380,6 +383,87 @@ def _compose_video_frame(
         bh = int(overlay_cache["bar_h"])
         frame[0:bh] = overlay_cache["top"]
     return frame
+
+
+def _oled_shift_enabled() -> bool:
+    return os.getenv("FRAMEPI_OLED_SHIFT", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+class _OledPixelShifter:
+    """Slow 1–2 px canvas offset to reduce static OLED burn-in (applied in pump_frame)."""
+
+    def __init__(self) -> None:
+        self._max_px = max(0, min(4, int(os.getenv("FRAMEPI_OLED_SHIFT_PX", "2"))))
+        self._interval = max(10.0, float(os.getenv("FRAMEPI_OLED_SHIFT_SEC", "60")))
+        patterns: list[tuple[int, int]] = [(0, 0)]
+        for px in range(1, self._max_px + 1):
+            patterns.extend(
+                [
+                    (px, 0),
+                    (px, px),
+                    (0, px),
+                    (-px, px),
+                    (-px, 0),
+                    (-px, -px),
+                    (0, -px),
+                    (px, -px),
+                ]
+            )
+        self._patterns = patterns
+        self._index = 0
+        self._last_step = time.monotonic()
+        self._dx = 0
+        self._dy = 0
+        self._buf: np.ndarray | None = None
+
+    def _step_if_due(self) -> tuple[int, int]:
+        if self._max_px <= 0:
+            return 0, 0
+        now = time.monotonic()
+        if now - self._last_step >= self._interval:
+            self._last_step = now
+            self._index = (self._index + 1) % len(self._patterns)
+            self._dx, self._dy = self._patterns[self._index]
+        return self._dx, self._dy
+
+    def apply(self, bgr: np.ndarray) -> np.ndarray:
+        dx, dy = self._step_if_due()
+        if dx == 0 and dy == 0:
+            return bgr
+        h, w = bgr.shape[:2]
+        if self._buf is None or self._buf.shape != bgr.shape:
+            self._buf = np.zeros_like(bgr)
+        else:
+            self._buf.fill(0)
+        out = self._buf
+        y_src0 = max(0, -dy)
+        y_src1 = h - max(0, dy)
+        x_src0 = max(0, -dx)
+        x_src1 = w - max(0, dx)
+        y_dst0 = max(0, dy)
+        x_dst0 = max(0, dx)
+        y_dst1 = y_dst0 + (y_src1 - y_src0)
+        x_dst1 = x_dst0 + (x_src1 - x_src0)
+        if y_src1 > y_src0 and x_src1 > x_src0:
+            out[y_dst0:y_dst1, x_dst0:x_dst1] = bgr[y_src0:y_src1, x_src0:x_src1]
+        return out
+
+
+_oled_shifter: _OledPixelShifter | None = None
+
+
+def _oled_pixel_shift(bgr: np.ndarray) -> np.ndarray:
+    global _oled_shifter
+    if not _oled_shift_enabled():
+        return bgr
+    if _oled_shifter is None:
+        _oled_shifter = _OledPixelShifter()
+    return _oled_shifter.apply(bgr)
 
 
 def letterbox(bgr: np.ndarray, tw: int, th: int, *, fast: bool = False) -> np.ndarray:
@@ -1281,7 +1365,7 @@ def run_viewer(
     def pump_frame(
         bgr: np.ndarray, current_mode: str, *, wait_ms: int | None = None
     ) -> tuple[str | None, int]:
-        cv2.imshow(WIN, bgr)
+        cv2.imshow(WIN, _oled_pixel_shift(bgr))
         nav: str | None = None
         if remote_q is not None:
             try:
