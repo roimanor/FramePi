@@ -1,6 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" aria-hidden="true">
-  <circle cx="24" cy="24" r="20" stroke="currentColor" stroke-width="2.2"/>
-  <path d="M10 28c4-8 10-12 14-12s10 4 14 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-  <path d="M8 32h32" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" opacity="0.55"/>
-  <circle cx="30" cy="18" r="3.2" fill="currentColor"/>
+  <path
+    d="M24 4C14.06 4 6 12.06 6 22c0 11.25 16.2 21.6 17.4 22.3a1.2 1.2 0 0 0 1.2 0C25.8 43.6 42 33.25 42 22 42 12.06 33.94 4 24 4Z"
+    stroke="currentColor"
+    stroke-width="2.2"
+    stroke-linejoin="round"
+  />
+  <circle cx="24" cy="21" r="6.5" stroke="currentColor" stroke-width="2.2" />
+  <circle cx="24" cy="21" r="2.8" fill="currentColor" />
 </svg>

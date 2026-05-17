@@ -12,7 +12,9 @@ OLED burn-in: ``FRAMEPI_OLED_SHIFT=1`` (default) nudges the image 1–2 px on a 
 frame is shown. Tune with ``FRAMEPI_OLED_SHIFT_PX`` and ``FRAMEPI_OLED_SHIFT_SEC``.
 
 Video download size is set at sync via ``GOOGLE_PHOTOS_VIDEO_SUFFIX_ORDER`` in ``.env`` (``m18`` = smallest).
-Optional ``FRAMEPI_VIDEO_PROXY=1`` re-encodes with ffmpeg at playback time (usually not needed).
+On Raspberry Pi, ``FRAMEPI_VIDEO_PROXY`` defaults on: small H.264 proxies are built at sync for smooth
+playback. Videos play via **mpv** when installed (``FRAMEPI_VIDEO_PLAYER=auto``); set ``opencv`` to use the
+legacy OpenCV frame loop. Install on Pi: ``sudo apt install mpv``.
 
 On the **map** (↑), upcoming Google Calendar events appear in a bottom panel when ``token_calendar.json``
 exists (run ``authorize_google_calendar.py``). Disable with ``FRAMEPI_MAP_CALENDAR=0``.
@@ -49,6 +51,23 @@ import app as fp
 import google_calendar_service
 import video_proxy
 from metadata_store import media_preview_urls
+from mpv_player import (
+    RESULT_EOF,
+    RESULT_FAILED,
+    RESULT_GALLERY,
+    RESULT_MAP,
+    RESULT_NEXT,
+    RESULT_ON_THIS_DAY,
+    RESULT_PREV,
+    RESULT_QUIT,
+    RESULT_RELOAD,
+    RESULT_TIMEOUT,
+    play_video_mpv,
+    preferred_video_player,
+    shutdown_mpv,
+    warm_mpv_async,
+)
+from video_proxy import is_pi_zero_class
 from shared_album_sync import _append_disk_only_googleusercontent_items
 from static_map import (
     build_map_layout,
@@ -159,12 +178,37 @@ def _video_decode_max_edge(tw: int, th: int) -> int:
         except ValueError:
             pass
     q = os.getenv("FRAMEPI_VIDEO_QUALITY", "").strip().lower()
-    presets = {"low": 360, "medium": 540, "high": 960}
+    if is_pi_zero_class():
+        presets = {"low": 320, "medium": 400, "high": 480}
+    else:
+        presets = {"low": 360, "medium": 540, "high": 960}
     if q in presets:
         return presets[q]
+    if is_pi_zero_class():
+        return 320
     if platform.machine().lower() in ("aarch64", "armv7l", "armv6l"):
         return max(320, min(480, max(tw, th)))
     return max(640, min(1280, int(max(tw, th) * 1.25)))
+
+
+def _letterbox_fit_size(sw: int, sh: int, tw: int, th: int) -> tuple[int, int]:
+    """Inner picture size when fitting ``sw x sh`` into ``tw x th`` (even dimensions for ffmpeg)."""
+    if sw < 1 or sh < 1:
+        return max(2, tw - tw % 2), max(2, th - th % 2)
+    scale = min(tw / sw, th / sh)
+    nw = max(2, int(round(sw * scale)))
+    nh = max(2, int(round(sh * scale)))
+    nw = nw - nw % 2
+    nh = nh - nh % 2
+    return nw, nh
+
+
+def _ffmpeg_letterbox_filter(sw: int, sh: int, tw: int, th: int) -> str:
+    nw, nh = _letterbox_fit_size(sw, sh, tw, th)
+    return (
+        f"scale={nw}:{nh}:flags=fast_bilinear,"
+        f"pad={tw}:{th}:(ow-iw)/2:(oh-ih)/2:black,format=bgr24"
+    )
 
 
 def _scaled_frame_size(sw: int, sh: int, max_edge: int) -> tuple[int, int]:
@@ -235,22 +279,55 @@ def _prefer_ffmpeg_video_decoder() -> bool:
         return shutil.which("ffmpeg") is not None
     if mode == "opencv":
         return False
-    if platform.machine().lower() in ("aarch64", "armv7l", "armv6l"):
-        return shutil.which("ffmpeg") is not None
-    return False
+    return shutil.which("ffmpeg") is not None
+
+
+def _video_playback_fps(source_fps: float) -> float:
+    """Wall-clock rate from the file we are playing (proxy fps must match for smooth motion)."""
+    raw = os.getenv("FRAMEPI_VIDEO_PLAYBACK_FPS", "").strip()
+    if raw:
+        try:
+            return max(8.0, min(30.0, float(raw)))
+        except ValueError:
+            pass
+    return _clamp_video_fps(source_fps)
+
+
+def _ffmpeg_video_input_args() -> list[str]:
+    """Optional hardware decode on Pi 4+ (disabled on Pi Zero — no usable HW path)."""
+    if is_pi_zero_class():
+        return []
+    mode = os.getenv("FRAMEPI_VIDEO_HWACCEL", "auto").strip().lower()
+    if mode in {"0", "false", "no", "off"}:
+        return []
+    if platform.machine().lower() not in ("aarch64", "armv7l", "armv6l"):
+        return []
+    if mode in {"drm", "auto"}:
+        return ["-hwaccel", "drm", "-hwaccel_output_format", "drm_prime"]
+    return []
+
+
+def _ffmpeg_decode_threads() -> str:
+    return "1" if is_pi_zero_class() else "2"
 
 
 class _OpenCVVideoReader:
     def __init__(self, path: Path, tw: int, th: int, *, scale_max_edge: int | None = None) -> None:
         self.ok = False
         self.fps = 24.0
+        self.full_canvas = False
         self._max_edge = (
             _video_decode_max_edge(tw, th) if scale_max_edge is None else max(0, scale_max_edge)
         )
-        self._cap = cv2.VideoCapture(str(path))
+        self._cap = cv2.VideoCapture(str(path), cv2.CAP_FFMPEG)
         if not self._cap.isOpened():
             return
-        self.fps = _video_source_fps(self._cap)
+        try:
+            self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
+        probed = _video_source_fps(self._cap)
+        self.fps = _video_playback_fps(probed)
         ok, frame = self._cap.read()
         if not ok or frame is None:
             self.release()
@@ -277,63 +354,73 @@ class _OpenCVVideoReader:
 
 
 class _FfmpegVideoReader:
-    """Decode via ffmpeg at reduced resolution (much lighter on Pi Zero)."""
+    """Decode via ffmpeg straight to display-sized BGR frames (no Python letterbox per frame)."""
 
     def __init__(self, path: Path, tw: int, th: int) -> None:
         self.ok = False
         self.fps = 24.0
+        self.full_canvas = True
         self._proc: subprocess.Popen[bytes] | None = None
-        self._dw = 0
-        self._dh = 0
-        self._frame_bytes = 0
+        self._tw = max(2, tw - tw % 2)
+        self._th = max(2, th - th % 2)
+        self._frame_bytes = self._tw * self._th * 3
+        self._buf: np.ndarray | None = None
         if not shutil.which("ffmpeg"):
             return
         probe = _ffprobe_video(path)
         sw, sh = (probe[0], probe[1]) if probe else (1280, 720)
-        if probe:
-            self.fps = _clamp_video_fps(probe[2])
-        max_edge = _video_decode_max_edge(tw, th)
-        self._dw, self._dh = _scaled_frame_size(sw, sh, max_edge)
-        self._frame_bytes = self._dw * self._dh * 3
-        out_fps = max(12, int(round(self.fps)))
-        cmd = [
-            "ffmpeg",
-            "-nostdin",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-i",
-            str(path),
-            "-an",
-            "-vf",
-            f"scale={self._dw}:{self._dh}",
-            "-r",
-            str(out_fps),
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "bgr24",
-            "pipe:1",
-        ]
-        try:
-            self._proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        except OSError:
-            return
-        if self._proc.stdout is None:
-            self.release()
-            return
-        self.fps = float(out_fps)
+        source_fps = _clamp_video_fps(probe[2]) if probe else 24.0
+        self.fps = _video_playback_fps(source_fps)
+        self._buf = np.empty((self._th, self._tw, 3), dtype=np.uint8)
+        vf = _ffmpeg_letterbox_filter(sw, sh, self._tw, self._th)
+        for attempt in range(1):
+            cmd = [
+                "ffmpeg",
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-fflags",
+                "nobuffer",
+                "-flags",
+                "low_delay",
+                "-threads",
+                _ffmpeg_decode_threads(),
+                "-i",
+                str(path),
+                "-an",
+                "-vf",
+                vf,
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "bgr24",
+                "pipe:1",
+            ]
+            try:
+                self._proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            except OSError:
+                return
+            if self._proc.stdout is None:
+                self.release()
+                return
+            break
         self.ok = True
 
     def read(self) -> tuple[bool, np.ndarray | None]:
-        if not self.ok or self._proc is None or self._proc.stdout is None:
+        if (
+            not self.ok
+            or self._proc is None
+            or self._proc.stdout is None
+            or self._buf is None
+        ):
             return False, None
         raw = self._proc.stdout.read(self._frame_bytes)
         if len(raw) != self._frame_bytes:
             self.ok = False
             return False, None
-        frame = np.frombuffer(raw, dtype=np.uint8).reshape((self._dh, self._dw, 3))
-        return True, frame.copy()
+        np.copyto(self._buf, np.frombuffer(raw, dtype=np.uint8).reshape((self._th, self._tw, 3)))
+        return True, self._buf
 
     def release(self) -> None:
         if self._proc is not None:
@@ -349,15 +436,19 @@ class _FfmpegVideoReader:
 
 
 def _open_video_reader(path: Path, tw: int, th: int) -> _OpenCVVideoReader | _FfmpegVideoReader | None:
-    play_path = video_proxy.resolve_playback_path(path, fp.DATA_DIR)
-    if video_proxy.is_proxy_file(play_path, fp.DATA_DIR):
+    play_path = video_proxy.resolve_playback_path(path, fp.DATA_DIR, build_if_missing=True)
+    is_proxy = video_proxy.is_proxy_file(play_path, fp.DATA_DIR)
+    # Proxies are already small — decode natively and letterbox in Python (less pipe bandwidth than full canvas).
+    if is_proxy:
         ocv = _OpenCVVideoReader(play_path, tw, th, scale_max_edge=0)
-        return ocv if ocv.ok else None
-    if _prefer_ffmpeg_video_decoder():
-        ff = _FfmpegVideoReader(path, tw, th)
+        if ocv.ok:
+            return ocv
+    if shutil.which("ffmpeg"):
+        ff = _FfmpegVideoReader(play_path, tw, th)
         if ff.ok:
             return ff
-    ocv = _OpenCVVideoReader(path, tw, th)
+    scale_edge = 0 if is_proxy else None
+    ocv = _OpenCVVideoReader(play_path, tw, th, scale_max_edge=scale_edge)
     return ocv if ocv.ok else None
 
 
@@ -369,8 +460,12 @@ def _compose_video_frame(
     *,
     same_date_past_years: bool,
     overlay_cache: dict[str, Any],
+    full_canvas: bool = False,
 ) -> np.ndarray:
-    frame = letterbox(vf, tw, th, fast=True)
+    if full_canvas and vf.shape[0] == th and vf.shape[1] == tw:
+        frame = vf
+    else:
+        frame = letterbox(vf, tw, th, fast=True)
     if not _metadata_overlay_enabled():
         return frame
     key = (str(item.get("local_path") or ""), tw, th, same_date_past_years)
@@ -399,7 +494,8 @@ class _OledPixelShifter:
 
     def __init__(self) -> None:
         self._max_px = max(0, min(4, int(os.getenv("FRAMEPI_OLED_SHIFT_PX", "2"))))
-        self._interval = max(10.0, float(os.getenv("FRAMEPI_OLED_SHIFT_SEC", "60")))
+        shift_default = "90" if is_pi_zero_class() else "60"
+        self._interval = max(10.0, float(os.getenv("FRAMEPI_OLED_SHIFT_SEC", shift_default)))
         patterns: list[tuple[int, int]] = [(0, 0)]
         for px in range(1, self._max_px + 1):
             patterns.extend(
@@ -457,8 +553,15 @@ class _OledPixelShifter:
 _oled_shifter: _OledPixelShifter | None = None
 
 
-def _oled_pixel_shift(bgr: np.ndarray) -> np.ndarray:
+def _oled_pixel_shift(bgr: np.ndarray, *, during_video: bool = False) -> np.ndarray:
     global _oled_shifter
+    if during_video and os.getenv("FRAMEPI_OLED_SHIFT_VIDEO", "0").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return bgr
     if not _oled_shift_enabled():
         return bgr
     if _oled_shifter is None:
@@ -482,6 +585,18 @@ def letterbox(bgr: np.ndarray, tw: int, th: int, *, fast: bool = False) -> np.nd
     y0 = (th - nh) // 2
     canvas[y0 : y0 + nh, x0 : x0 + nw] = resized
     return canvas
+
+
+def focus_viewer_window() -> None:
+    """Raise the OpenCV window above a hidden/stopped mpv instance."""
+    try:
+        cv2.setWindowProperty(WIN, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+        if hasattr(cv2, "WND_PROP_TOPMOST"):
+            cv2.setWindowProperty(WIN, cv2.WND_PROP_TOPMOST, 1)
+            cv2.waitKeyEx(1)
+            cv2.setWindowProperty(WIN, cv2.WND_PROP_TOPMOST, 0)
+    except cv2.error:
+        pass
 
 
 def bootstrap_window_size() -> tuple[int, int]:
@@ -844,6 +959,32 @@ def _cluster_media_summary(cluster: dict[str, Any]) -> str:
     if videos:
         parts.append(f"{videos} video{'s' if videos != 1 else ''}")
     return ", ".join(parts)
+
+
+def _sort_map_pins_screen_order(
+    specs: list[tuple[dict[str, Any], int, int]],
+) -> list[tuple[dict[str, Any], int, int]]:
+    """←/→ follow on-screen position: left to right, then top to bottom."""
+    return sorted(specs, key=lambda t: (t[1], t[2]))
+
+
+def _map_pin_index_for_cluster(
+    specs: list[tuple[dict[str, Any], int, int]],
+    cluster: dict[str, Any],
+) -> int | None:
+    """Index of ``cluster`` in ``specs`` (match lat/lon), or None."""
+    try:
+        lat = round(float(cluster["lat"]), 5)
+        lon = round(float(cluster["lon"]), 5)
+    except (KeyError, TypeError, ValueError):
+        return None
+    for i, (cl, _px, _py) in enumerate(specs):
+        try:
+            if round(float(cl["lat"]), 5) == lat and round(float(cl["lon"]), 5) == lon:
+                return i
+        except (KeyError, TypeError, ValueError):
+            continue
+    return None
 
 
 def _draw_map_pin_tooltip(
@@ -1362,10 +1503,19 @@ def run_viewer(
             video_reader.release()
             video_reader = None
 
+    def exit_viewer() -> None:
+        release_cap()
+        shutdown_mpv()
+        cv2.destroyAllWindows()
+
     def pump_frame(
-        bgr: np.ndarray, current_mode: str, *, wait_ms: int | None = None
+        bgr: np.ndarray,
+        current_mode: str,
+        *,
+        wait_ms: int | None = None,
+        video_playback: bool = False,
     ) -> tuple[str | None, int]:
-        cv2.imshow(WIN, _oled_pixel_shift(bgr))
+        cv2.imshow(WIN, _oled_pixel_shift(bgr, during_video=video_playback))
         nav: str | None = None
         if remote_q is not None:
             try:
@@ -1393,6 +1543,7 @@ def run_viewer(
         return nav, k
 
     bootstrap_window_size()
+    warm_mpv_async()
     reload_items()
     last_empty_metadata_poll = time.monotonic()
 
@@ -1409,6 +1560,9 @@ def run_viewer(
                     and map_raster_source in ("google", "osm")
                 ):
                     ih, iw = map_cache.shape[0], map_cache.shape[1]
+                    prev_cluster: dict[str, Any] | None = None
+                    if map_pin_specs:
+                        prev_cluster = map_pin_specs[map_pin_index % len(map_pin_specs)][0]
                     if map_raster_source == "osm":
                         raw_specs, ptw, pth = osm_cluster_pin_specs(map_layout)
                         sx = iw / max(1, ptw)
@@ -1425,7 +1579,12 @@ def run_viewer(
                         map_pin_specs = []
                         for i in range(min(len(clusters_s), len(pts))):
                             map_pin_specs.append((clusters_s[i], pts[i][0], pts[i][1]))
+                    map_pin_specs = _sort_map_pins_screen_order(map_pin_specs)
                     map_pin_index = 0
+                    if prev_cluster is not None:
+                        idx = _map_pin_index_for_cluster(map_pin_specs, prev_cluster)
+                        if idx is not None:
+                            map_pin_index = idx
                 else:
                     map_pin_specs = []
             if map_cache is None:
@@ -1531,8 +1690,7 @@ def run_viewer(
                 while time.monotonic() - t0 < slide_ms / 1000.0:
                     nav, key_ex = pump_frame(frame, mode)
                     if key_ex in (27, ord("q")):
-                        release_cap()
-                        cv2.destroyAllWindows()
+                        exit_viewer()
                         return
                     if try_on_this_day_toggle(nav, key_ex):
                         release_cap()
@@ -1550,6 +1708,51 @@ def run_viewer(
                 else:
                     index = (index + 1) % len(items)
                 continue
+
+            play_path = video_proxy.resolve_playback_path(path, fp.DATA_DIR, build_if_missing=True)
+            if preferred_video_player() == "mpv":
+
+                def _mpv_pause_changed(p: bool) -> None:
+                    nonlocal slideshow_paused, last_remote_now_sig
+                    slideshow_paused = p
+                    last_remote_now_sig = None
+                    publish_remote_now()
+
+                mpv_result = play_video_mpv(
+                    play_path,
+                    video_max_ms=video_max_ms,
+                    mode=mode,
+                    start_paused=slideshow_paused,
+                    remote_q=remote_q,
+                    settings_q=settings_q,
+                    apply_remote_settings=apply_remote_settings,
+                    on_pause_changed=_mpv_pause_changed,
+                    nav_from_remote_key=nav_from_remote_key,
+                    decode_nav=decode_nav,
+                )
+                release_cap()
+                focus_viewer_window()
+                if mpv_result == RESULT_QUIT:
+                    exit_viewer()
+                    return
+                if mpv_result == RESULT_ON_THIS_DAY:
+                    toggle_on_this_day()
+                    continue
+                if mpv_result == RESULT_PREV:
+                    index = (index - 1 + len(items)) % len(items)
+                    continue
+                if mpv_result in (RESULT_NEXT, RESULT_GALLERY, RESULT_EOF, RESULT_TIMEOUT):
+                    index = (index + 1) % len(items)
+                    continue
+                if mpv_result == RESULT_MAP:
+                    mode = "map"
+                    need_map_now_sync = True
+                    continue
+                if mpv_result == RESULT_RELOAD:
+                    reload_items()
+                    continue
+                if mpv_result != RESULT_FAILED:
+                    continue
 
             video_reader = _open_video_reader(path, tw, th)
             if video_reader is None:
@@ -1558,8 +1761,7 @@ def run_viewer(
                 while time.monotonic() - t0 < 2.0:
                     nav, key_ex = pump_frame(frame, mode)
                     if key_ex in (27, ord("q")):
-                        release_cap()
-                        cv2.destroyAllWindows()
+                        exit_viewer()
                         return
                     if try_on_this_day_toggle(nav, key_ex):
                         release_cap()
@@ -1578,19 +1780,38 @@ def run_viewer(
                     index = (index + 1) % len(items)
                 continue
 
-            fps = video_reader.fps
+            fps = max(8.0, float(video_reader.fps))
             frame_period = 1.0 / fps
             t_video = time.monotonic()
-            next_frame_at = t_video
+            next_show = t_video
             frames_shown = 0
             video_overlay_cache: dict[str, Any] = {}
             eof = False
             hold_frame: np.ndarray | None = None
+            last_frame: np.ndarray | None = None
+            use_canvas = getattr(video_reader, "full_canvas", False)
             while True:
-                if slideshow_paused and hold_frame is not None:
+                now = time.monotonic()
+                if slideshow_paused:
+                    if hold_frame is None:
+                        hold_frame = last_frame
+                    if hold_frame is None:
+                        hold_frame = show_message(tw, th, ["Paused"])
                     frame = hold_frame
                     wait_ms = 30
+                elif now + 0.001 < next_show and last_frame is not None:
+                    frame = last_frame
+                    wait_ms = max(1, int((next_show - now) * 1000))
                 else:
+                    while now > next_show + frame_period:
+                        ok_skip, _ = video_reader.read()
+                        if not ok_skip:
+                            eof = True
+                            break
+                        next_show += frame_period
+                        now = time.monotonic()
+                    if eof:
+                        break
                     ok, vf = video_reader.read()
                     if not ok or vf is None:
                         eof = True
@@ -1603,19 +1824,19 @@ def run_viewer(
                         item,
                         same_date_past_years=on_this_day_filter,
                         overlay_cache=video_overlay_cache,
+                        full_canvas=use_canvas,
                     )
                     hold_frame = frame
+                    last_frame = frame
                     frames_shown += 1
+                    next_show = time.monotonic() + frame_period
                     wait_ms = 1
-                    now = time.monotonic()
-                    if now < next_frame_at:
-                        wait_ms = max(1, int((next_frame_at - now) * 1000))
-                    next_frame_at += frame_period
 
-                nav, key_ex = pump_frame(frame, mode, wait_ms=wait_ms)
+                nav, key_ex = pump_frame(
+                    frame, mode, wait_ms=wait_ms, video_playback=True
+                )
                 if key_ex in (27, ord("q")):
-                    release_cap()
-                    cv2.destroyAllWindows()
+                    exit_viewer()
                     return
                 if try_pause_toggle(nav, key_ex):
                     continue
@@ -1662,8 +1883,7 @@ def run_viewer(
                 while time.monotonic() - t0 < 2.5:
                     nav, key_ex = pump_frame(frame, mode)
                     if key_ex in (27, ord("q")):
-                        release_cap()
-                        cv2.destroyAllWindows()
+                        exit_viewer()
                         return
                     if nav in ("prev", "next", "gallery"):
                         break
@@ -1680,7 +1900,7 @@ def run_viewer(
             while time.monotonic() - t0 < min(2.0, slide_ms / 1000.0):
                 nav, key_ex = pump_frame(frame, mode)
                 if key_ex in (27, ord("q")):
-                    cv2.destroyAllWindows()
+                    exit_viewer()
                     return
                 if try_on_this_day_toggle(nav, key_ex):
                     break
@@ -1705,7 +1925,7 @@ def run_viewer(
             while time.monotonic() < t_end:
                 nav, key_ex = pump_frame(frame, mode)
                 if key_ex in (27, ord("q")):
-                    cv2.destroyAllWindows()
+                    exit_viewer()
                     return
                 if try_on_this_day_toggle(nav, key_ex):
                     break
@@ -1726,7 +1946,7 @@ def run_viewer(
         while not auto_advance_deadline_passed(t_end):
             nav, key_ex = pump_frame(frame, mode)
             if key_ex in (27, ord("q")):
-                cv2.destroyAllWindows()
+                exit_viewer()
                 return
             if try_pause_toggle(nav, key_ex):
                 continue
@@ -1754,8 +1974,7 @@ def run_viewer(
         if not advanced:
             index = (index + 1) % len(items)
 
-    release_cap()
-    cv2.destroyAllWindows()
+    exit_viewer()
 
 
 def main() -> None:

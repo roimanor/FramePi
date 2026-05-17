@@ -23,6 +23,13 @@
   var headerHint = document.getElementById("remote-header-hint");
   var panelGallery = document.getElementById("remote-controls-gallery");
   var panelMap = document.getElementById("remote-controls-map");
+
+  if (panelMap) {
+    panelMap.querySelectorAll('[data-remote-key="Enter"]').forEach(function (btn) {
+      btn.remove();
+    });
+  }
+
   var currentItem = null;
   var currentPreview = null;
   var slideshowPaused = false;

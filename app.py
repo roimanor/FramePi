@@ -13,6 +13,7 @@ from flask import (
     Response,
     abort,
     jsonify,
+    make_response,
     redirect,
     render_template,
     request,
@@ -260,7 +261,11 @@ def root_redirect():
 
 @app.route("/remote")
 def remote_control():
-    return render_template("remote.html")
+    resp = make_response(render_template("remote.html"))
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 
 @app.route("/api/remote/stream")

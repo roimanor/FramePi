@@ -17,6 +17,7 @@ cd ~/FramePi
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+sudo apt install mpv   # hardware video decode on the Pi (recommended)
 # Create `.env` in this folder (see variables below).
 ```
 
@@ -90,6 +91,6 @@ sudo systemctl status framepi
 ## Notes
 
 - Shared-album sync uses page scraping and may break if Google changes page structure.
-- Videos are included when the album serves downloadable video URLs.
+- Videos are included when the album serves downloadable video URLs. Playback uses **mpv** when installed (`FRAMEPI_VIDEO_PLAYER=auto`); photos and the map still use OpenCV.
 - With ``DELETE_REMOVED_FROM_FRAME`` enabled, files removed from the album can be deleted from ``data/photos`` (see env docs in code).
 # FramePi

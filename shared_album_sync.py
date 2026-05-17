@@ -1257,6 +1257,14 @@ def sync_shared_album(shared_album_url: str, output_dir: Path) -> List[Dict]:
             elif scaled != raw_img:
                 local_path.write_bytes(scaled)
 
+        if media_kind == "video" and local_path.is_file():
+            try:
+                from video_proxy import warm_video_proxy
+
+                warm_video_proxy(local_path, output_dir)
+            except Exception as exc:
+                print(f"[sync] video proxy skipped for {local_name}: {exc}")
+
         if media_kind == "image":
             exif_data = _extract_exif(local_path)
             if gps_from_variant is not None and (

@@ -3,8 +3,11 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
     <title>FramePi Remote</title>
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/styles.css?v=20250516" />
   </head>
   <body class="remote-page remote-mode-waiting">
     <main class="remote-main">
@@ -101,8 +104,16 @@
           <button type="button" class="remote-icon-btn" data-remote-key="ArrowRight" aria-label="Next">
             <span class="remote-glyph remote-glyph--next" aria-hidden="true"></span>
           </button>
-          <button type="button" class="remote-icon-btn remote-icon-btn--thumb" data-remote-key="ArrowUp" aria-label="Open map">
-            <img class="remote-thumb-icon" src="/static/icons/map.svg" alt="" width="28" height="28" />
+          <button
+            type="button"
+            class="remote-icon-btn remote-icon-btn--mode remote-icon-btn--map"
+            data-remote-key="ArrowUp"
+            aria-label="Open map"
+          >
+            <span class="remote-mode-btn-inner">
+              <img class="remote-mode-btn-icon" src="/static/icons/map.svg" alt="" width="26" height="26" />
+              <span class="remote-mode-btn-label">Map</span>
+            </span>
           </button>
           <button type="button" class="remote-icon-btn remote-icon-btn--aux" data-remote-key="OnThisDay" aria-label="Same day in past years">
             <span class="remote-glyph remote-glyph--calendar" aria-hidden="true"></span>
@@ -126,11 +137,16 @@
           <button type="button" class="remote-icon-btn" data-remote-key="ArrowRight" aria-label="Next pin">
             <span class="remote-glyph remote-glyph--next" aria-hidden="true"></span>
           </button>
-          <button type="button" class="remote-icon-btn remote-icon-btn--thumb" data-remote-key="ArrowDown" aria-label="Back to slideshow">
-            <img class="remote-thumb-icon" src="/static/icons/gallery.svg" alt="" width="28" height="28" />
-          </button>
-          <button type="button" class="remote-icon-btn remote-icon-btn--aux" data-remote-key="Enter" aria-label="Skip to next slide">
-            <span class="remote-glyph remote-glyph--skip" aria-hidden="true"></span>
+          <button
+            type="button"
+            class="remote-icon-btn remote-icon-btn--mode remote-icon-btn--gallery"
+            data-remote-key="ArrowDown"
+            aria-label="Back to slideshow"
+          >
+            <span class="remote-mode-btn-inner">
+              <img class="remote-mode-btn-icon" src="/static/icons/gallery.svg" alt="" width="26" height="26" />
+              <span class="remote-mode-btn-label">Photos</span>
+            </span>
           </button>
         </div>
       </section>
@@ -143,6 +159,6 @@
 
       <p id="remote-status" class="remote-status" aria-live="polite"></p>
     </main>
-    <script src="/static/remote.js"></script>
+    <script src="/static/remote.js?v=20250516"></script>
   </body>
 </html>
